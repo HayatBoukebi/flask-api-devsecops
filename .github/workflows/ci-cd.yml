@@ -8,10 +8,13 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_ID: ${{ github.repository_owner }}/${{ github.event.repository.name }}
 
 jobs:
 
+  # ==========================================
+  #                  JOB CI
+  # ==========================================
   continuous-integration:
     name: "CI - Tests & Sécurité"
     runs-on: ubuntu-latest
@@ -60,6 +63,9 @@ jobs:
     - name: "Analyse CodeQL"
       uses: github/codeql-action/analyze@v3
 
+  # ==========================================
+  #                  JOB CD
+  # ==========================================
   continuous-deployment:
     name: "CD - Déploiement Azure"
     needs: continuous-integration
@@ -71,6 +77,7 @@ jobs:
       packages: write
 
     steps:
+
     - name: "Checkout"
       uses: actions/checkout@v4
 
@@ -86,11 +93,11 @@ jobs:
 
     - name: "Build image Docker"
       run: |
-        docker build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
+        docker build -t ghcr.io/${{ env.IMAGE_ID }}:${{ github.sha }} .
 
     - name: "Push image Docker"
       run: |
-        docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
+        docker push ghcr.io/${{ env.IMAGE_ID }}:${{ github.sha }}
 
     - name: "Déploiement SSH Azure"
       uses: appleboy/ssh-action@v1.0.3
@@ -99,19 +106,25 @@ jobs:
         username: ${{ secrets.AZURE_USERNAME }}
         key: ${{ secrets.AZURE_SSH_KEY }}
         script: |
+          echo "Connexion à GHCR…"
           docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
 
-          docker pull ghcr.io/${{ github.repository }}:${{ github.sha }}
+          echo "Pull nouvelle image…"
+          docker pull ghcr.io/${{ env.IMAGE_ID }}:${{ github.sha }}
 
+          echo "Arrêt ancienne version…"
           docker stop flask-app || true
           docker rm flask-app || true
 
+          echo "Nettoyage images inutiles…"
           docker image prune -f || true
 
+          echo "Démarrage du nouveau conteneur…"
           docker run -d \
             --name flask-app \
             --restart unless-stopped \
             -p 80:5000 \
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_ID }}:${{ github.sha }}
 
+          echo "Conteneur en cours d'exécution :"
           docker ps
