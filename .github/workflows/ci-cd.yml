@@ -1,7 +1,74 @@
+name: Pipeline CI/CD DevSecOps Azure
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+
+  continuous-integration:
+    name: "CI - Tests & Sécurité"
+    runs-on: ubuntu-latest
+
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+      packages: read
+
+    steps:
+    - name: "Checkout"
+      uses: actions/checkout@v4
+
+    - name: "Setup Python"
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.9"
+        cache: "pip"
+
+    - name: "Installer dépendances"
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: "Tests unitaires"
+      run: pytest -v --junitxml=test-results.xml
+
+    - name: "Upload résultats tests"
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: test-results.xml
+
+    - name: "Linting flake8"
+      run: flake8 . --count --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: "Init CodeQL"
+      uses: github/codeql-action/init@v3
+      with:
+        languages: python
+
+    - name: "Build pour CodeQL"
+      run: python -m py_compile app.py test_app.py
+
+    - name: "Analyse CodeQL"
+      uses: github/codeql-action/analyze@v3
+
   continuous-deployment:
     name: "CD - Déploiement Azure"
     needs: continuous-integration
     runs-on: ubuntu-latest
+    environment: production
+
+    permissions:
+      contents: read
+      packages: write
 
     steps:
     - name: "Checkout"
@@ -10,22 +77,22 @@
     - name: "Setup Docker Buildx"
       uses: docker/setup-buildx-action@v3
 
-    - name: "Login to GHCR"
+    - name: "Login à GHCR"
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: "Build Docker"
+    - name: "Build image Docker"
       run: |
         docker build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
 
-    - name: "Push Docker image"
+    - name: "Push image Docker"
       run: |
         docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
 
-    - name: "Déploiement sur Azure VM via SSH"
+    - name: "Déploiement SSH Azure"
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.AZURE_HOST }}
@@ -38,6 +105,8 @@
 
           docker stop flask-app || true
           docker rm flask-app || true
+
+          docker image prune -f || true
 
           docker run -d \
             --name flask-app \
